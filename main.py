@@ -1,29 +1,40 @@
 import time
 import os
+
 import uiautomator2 as u2
 
-import config.config as config
 from common.ai import AIBrain
-from common.executor import UIExecutor
 from common.logs import log
+from common.executor import UIExecutor
+from common.history_manager import StepHistoryManager
+import config.config as config
 from utils.utils_xml import compress_android_xml
 
 
-def init_test_file():
-    """初始化测试脚本"""
-    # 确保 test_cases 文件夹存在
-    os.makedirs(os.path.dirname(config.OUTPUT_SCRIPT_FILE), exist_ok=True)
-
-    with open(config.OUTPUT_SCRIPT_FILE, "w", encoding="utf-8") as f:
-        f.write("# -*- coding: utf-8 -*-\n")
-        f.write("# 本脚本由 AI Agent 自动录制生成\n")
-        f.write("import allure\n")
-        f.write("import pytest\n\n")
-        f.write("@allure.feature('核心业务流测试')\n")
-        f.write("@allure.story('AI 自动录制场景')\n")
+def get_initial_header() -> list:
+    """获取测试脚本的初始头部内容"""
+    return [
+        "# -*- coding: utf-8 -*-\n",
+        "# 本脚本由 AI Agent 自动录制生成\n",
+        "import allure\n",
+        "import pytest\n\n",
+        "from common.logs import log\n\n",
+        "@allure.feature('核心业务流测试')\n",
+        "@allure.story('AI 自动录制场景')\n",
         # 参数 d 即调用 conftest.py 中的 fixture
-        f.write("def test_auto_generated_case(d):\n")
-        f.write('    """回放自动录制的 UI 步骤"""\n')
+        "def test_auto_generated_case(d):\n",
+        '    """回放自动录制的 UI 步骤"""\n'
+    ]
+
+
+def save_to_disk(file_path: str, content: list) -> None:
+    """保存文件内容到磁盘"""
+    log.debug(f"[SaveToDisk] 脚本保存至 {file_path}, 内容长度: {len(content)}")
+    log.debug(f"[SaveToDisk] 内容预览: {content[:5]}")
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.writelines(content)
+    log.debug("[SaveToDisk] 文件保存成功")
 
 
 def launch_app(device: u2.Device, env_name="dev", system="android"):
@@ -41,7 +52,7 @@ def _get_app_config(env_name="dev", system="android"):
 
 def main():
     log.info("=" * 50)
-    log.info("🚀 Android AI 测试录制引擎 (Pytest+Allure 最佳实践)")
+    log.info("🚀 Android AI 测试录制引擎")
     log.info("=" * 50)
 
     try:
@@ -57,38 +68,100 @@ def main():
 
     launch_app(device)
 
-    init_test_file()
+    # 初始化历史管理器，传入初始头部内容
+    initial_header = get_initial_header()
+    history_manager = StepHistoryManager(initial_content=initial_header)
+
+    # 保存初始文件到磁盘
+    save_to_disk(config.OUTPUT_SCRIPT_FILE, initial_header)
     log.info(f"✅ 测试脚本已创建: {config.OUTPUT_SCRIPT_FILE}")
     log.info("✅ 待操作 AI 填入测试用例内容")
 
     brain = AIBrain()
     executor = UIExecutor(device)
 
-    with open(config.OUTPUT_SCRIPT_FILE, "a", encoding="utf-8") as file_obj:
-        while True:
-            cmd = input("\n👉 请输入自然语言指令 (输入 'q' 退出): ").strip()
-            if not cmd:
+    while True:
+        history_count = history_manager.get_history_count()
+        prompt = f"\n👉 请输入自然语言指令 (输入 'q' 退出, 'u' 撤销) [已录制 {history_count} 步]: "
+        cmd = input(prompt).strip()
+        if not cmd:
+            continue
+        if cmd.lower() in ["exit", "q", "quit"]:
+            log.info("🎉 录制结束！")
+            log.info(f"已生成测试脚本，文件路径: {config.OUTPUT_SCRIPT_FILE}")
+            log.info("请运行命令执行回放并查看报告：")
+            log.info("1. pytest")
+            log.info("2. allure serve ./report/allure-results")
+            break
+
+        if cmd.lower() in ["u", "undo"]:
+            last_step = history_manager.get_last_step()
+            history_count_before = history_manager.get_history_count()
+
+            if not last_step:
+                log.warning("⚠️ 无可撤销的步骤")
                 continue
-            if cmd.lower() in ["exit", "q", "quit"]:
-                log.info("🎉 录制结束！")
-                log.info(f"已生成测试脚本，文件路径: {config.OUTPUT_SCRIPT_FILE}")
-                log.info("请运行命令执行回放并查看报告：")
-                log.info("1. pytest")
-                log.info("2. allure serve ./report/allure-results")
-                break
 
-            time.sleep(1)  # 等待页面动画稳定
+            # 显示最后一步的信息并请求确认
+            print(f"\n{'-'*60}")
+            print(f"⚠️  即将回滚以下操作:")
+            print(f"    - 时间: {last_step['timestamp']}")
+            print(f"    - 动作: {last_step['action_description']}")
+            print(f"    - 当前历史步数: {history_count_before}")
+            print(f"{'-'*60}")
 
-            log.info("[System] 抓取并压缩 XML 树")
-            ui_json = compress_android_xml(device.dump_hierarchy())
+            confirm = input("确认撤销此操作? (y/N，默认不撤销): ").strip().lower()
 
-            log.info("[System] AI 决策中")
-            action_data = brain.get_action(cmd, ui_json)
+            if confirm != 'y':
+                log.info("🔒 回滚操作已取消")
+                continue
 
-            if action_data:
-                executor.execute_and_record(action_data, file_obj)
+            # 执行回滚
+            log.info(f"[Rollback] 开始回滚操作")
+            log.info(f"[Rollback] 回滚前历史记录数: {history_count_before}")
+            log.info(f"[Rollback] 回滚的操作: {last_step['action_description']}")
+            log.info(f"[Rollback] 操作时间: {last_step['timestamp']}")
+
+            if history_manager.rollback():
+                history_count_after = history_manager.get_history_count()
+                log.info(f"[Rollback] 回滚后历史记录数: {history_count_after}")
+                log.info("✅ 回滚成功！")
+                # 回滚后保存文件到磁盘
+                save_to_disk(config.OUTPUT_SCRIPT_FILE, history_manager.get_current_file_content())
             else:
-                log.error("[System] ❌ 动作解析失败，请换一种描述。")
+                log.error("❌ 回滚失败")
+            continue
+
+        time.sleep(1)  # 等待页面动画稳定
+
+        log.info("[System] 抓取并压缩 XML 树")
+        ui_json = compress_android_xml(device.dump_hierarchy())
+
+        log.info("[System] AI 决策中")
+        action_data = brain.get_action(cmd, ui_json)
+
+        if action_data:
+            log.debug(f"[Debug] 动作数据: {action_data}")
+            result = executor.execute_and_record(action_data)
+            log.debug(f"[Debug] 执行结果: {result}")
+            log.debug(f"[Debug] Success: {result.get('success')}")
+            log.debug(f"[Debug] 代码行数: {len(result.get('code_lines', []))}")
+            if result["code_lines"]:
+                log.debug(f"[Debug] 生成的代码行: {result['code_lines']}")
+
+            if result["success"]:
+                log.debug("[Debug] 执行动作成功，添加到历史记录")
+                history_manager.add_step(result["code_lines"], result["action_description"])
+                log.debug(f"[Debug] 当前历史记录数: {history_manager.get_history_count()}")
+                current_content = history_manager.get_current_file_content()
+                log.debug(f"[Debug] 当前文件内容行数: {len(current_content)}")
+                # 保存到磁盘
+                save_to_disk(config.OUTPUT_SCRIPT_FILE, current_content)
+                log.debug(f"[Debug] 已保存 {len(result['code_lines'])} 行代码到 {config.OUTPUT_SCRIPT_FILE}")
+            else:
+                log.error("[System] ❌ 执行动作失败")
+        else:
+            log.error("[System] ❌ 动作解析失败，请换一种描述。")
 
 
 if __name__ == "__main__":

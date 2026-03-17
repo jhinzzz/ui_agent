@@ -1,7 +1,7 @@
 import json
 from openai import OpenAI
 
-from logs import log
+from common.logs import log
 import config.config as config
 
 
