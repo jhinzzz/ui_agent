@@ -82,7 +82,8 @@ def main():
 
     while True:
         history_count = history_manager.get_history_count()
-        prompt = f"\n👉 请输入自然语言指令 (输入 'q' 退出, 'u' 撤销) [已录制 {history_count} 步]: "
+        cache_status = "✅" if brain.cache_manager.enabled else "❌"
+        prompt = f"\n👉 请输入自然语言指令 (输入 'q' 退出, 'u' 撤销) [已录制 {history_count} 步] [缓存: {cache_status}]: "
         cmd = input(prompt).strip()
         if not cmd:
             continue
@@ -94,6 +95,41 @@ def main():
             log.info("2. allure serve ./report/allure-results")
             break
 
+        if cmd.lower() == "cache":
+            stats = brain.cache_manager.get_stats()
+            log.info(f"\n{'='*60}")
+            log.info("📊 缓存统计信息")
+            log.info(f"{'='*60}")
+            log.info(f"缓存状态: {'✅ 已启用' if brain.cache_manager.enabled else '❌ 已禁用'}")
+            log.info(f"总查询次数: {stats['total_queries']}")
+            log.info(f"缓存命中: {stats['cache_hits']}")
+            log.info(f"缓存未命中: {stats['cache_misses']}")
+            log.info(f"命中率: {stats['hit_rate']:.2%}")
+            log.info(f"节省的 API 调用: {stats['total_api_calls_saved']}")
+            if stats.get('first_cache_date'):
+                log.info(f"首次缓存时间: {stats['first_cache_date']}")
+            if stats.get('last_cache_date'):
+                log.info(f"最后缓存时间: {stats['last_cache_date']}")
+            log.info(f"{'='*60}")
+            continue
+
+        if cmd.lower() == "cache-on":
+            brain.cache_manager.enabled = True
+            log.info("✅ 缓存已启用")
+            continue
+
+        if cmd.lower() == "cache-off":
+            brain.cache_manager.enabled = False
+            log.info("❌ 缓存已禁用")
+            continue
+
+        if cmd.lower() == "cache-clear":
+            if brain.cache_manager.clear():
+                log.info("🗑️ 缓存已清空")
+            else:
+                log.error("❌ 清空缓存失败")
+            continue
+
         if cmd.lower() in ["u", "undo"]:
             last_step = history_manager.get_last_step()
             history_count_before = history_manager.get_history_count()
@@ -103,12 +139,12 @@ def main():
                 continue
 
             # 显示最后一步的信息并请求确认
-            print(f"\n{'-'*60}")
-            print(f"⚠️  即将回滚以下操作:")
-            print(f"    - 时间: {last_step['timestamp']}")
-            print(f"    - 动作: {last_step['action_description']}")
-            print(f"    - 当前历史步数: {history_count_before}")
-            print(f"{'-'*60}")
+            log.info(f"\n{'-'*60}")
+            log.info(f"⚠️  即将回滚以下操作:")
+            log.info(f"    - 时间: {last_step['timestamp']}")
+            log.info(f"    - 动作: {last_step['action_description']}")
+            log.info(f"    - 当前历史步数: {history_count_before}")
+            log.info(f"{'-'*60}")
 
             confirm = input("确认撤销此操作? (y/N，默认不撤销): ").strip().lower()
 
@@ -135,10 +171,12 @@ def main():
         time.sleep(1)  # 等待页面动画稳定
 
         log.info("[System] 抓取并压缩 XML 树")
-        ui_json = compress_android_xml(device.dump_hierarchy())
+        # 显式获取并保留 raw_xml，供 L2 问答缓存使用
+        raw_xml = device.dump_hierarchy()
+        ui_json = compress_android_xml(raw_xml)
 
         log.info("[System] AI 决策中")
-        action_data = brain.get_action(cmd, ui_json)
+        action_data = brain.get_action(cmd, ui_json, raw_xml)
 
         if action_data:
             log.debug(f"[Debug] 动作数据: {action_data}")
@@ -149,7 +187,7 @@ def main():
             if result["code_lines"]:
                 log.debug(f"[Debug] 生成的代码行: {result['code_lines']}")
 
-            if result["success"]:
+            if result.get("success"):
                 log.debug("[Debug] 执行动作成功，添加到历史记录")
                 history_manager.add_step(result["code_lines"], result["action_description"])
                 log.debug(f"[Debug] 当前历史记录数: {history_manager.get_history_count()}")

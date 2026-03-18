@@ -175,7 +175,7 @@ class UIExecutor:
                 return result
 
             code_lines = handler.generate_code(u2_key, l_value, extra_value, timeout)
-            
+
             # 构建返回结果
             result["success"] = True
             result["code_lines"] = code_lines
