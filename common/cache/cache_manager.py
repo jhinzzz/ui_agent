@@ -16,6 +16,7 @@ from common.logs import log
 from .cache_stats import CacheStats
 from .cache_hash import compute_ui_hash, compute_instruction_hash
 from .cache_storage import load_cache, save_cache, cleanup_expired_entries
+from .embedding_loader import EmbeddingModelLoader
 
 
 class CacheManager:
@@ -23,7 +24,7 @@ class CacheManager:
         self,
         cache_dir: str = ".cache",
         enabled: bool = False,
-        ttl_days: int = 7,
+        ttl_days: int = 365,
         max_size_mb: int = 100,
     ):
         self._cache_dir = cache_dir
@@ -31,8 +32,7 @@ class CacheManager:
         self._ttl_seconds = ttl_days * 24 * 60 * 60
         self._stats = CacheStats(cache_dir)
 
-        # 延迟加载大模型，避免启动卡顿
-        self._embedding_model = None
+        self._model_loader = EmbeddingModelLoader()
 
     @property
     def enabled(self) -> bool:
@@ -43,91 +43,8 @@ class CacheManager:
         self._enabled = value
 
     def _get_model(self):
-        """单例模式懒加载句子向量模型"""
-        if self._embedding_model is None:
-            log.info("⏳ [System] 正在初始化本地语义缓存引擎...")
-
-            model_name = "paraphrase-multilingual-MiniLM-L12-v2"
-            hf_cache_dir = (
-                Path.home()
-                / ".cache"
-                / "huggingface"
-                / "hub"
-                / f"models--sentence-transformers--{model_name}"
-            )
-
-            if not hf_cache_dir.exists():
-                log.warning("⏳ [System] 首次运行将自动下载模型 (约 100MB)。")
-                log.warning(
-                    "⏳ [System] 正在通过国内镜像源加速下载，请耐心等待 1~3 分钟..."
-                )
-            else:
-                log.info("🚀 [System] 检测到本地已有模型缓存，正在极速加载中...")
-
-            import urllib3
-            import requests
-
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-            old_requests_init = requests.Session.__init__
-
-            def safe_session_init(self, *args, **kwargs):
-                old_requests_init(self, *args, **kwargs)
-                self.verify = False
-
-            requests.Session.__init__ = safe_session_init
-
-            try:
-                import httpx
-
-                old_httpx_init = httpx.Client.__init__
-
-                def safe_httpx_init(self, *args, **kwargs):
-                    kwargs["verify"] = False
-                    old_httpx_init(self, *args, **kwargs)
-
-                httpx.Client.__init__ = safe_httpx_init
-            except ImportError:
-                pass
-
-            try:
-                from sentence_transformers import SentenceTransformer
-
-                try:
-                    self._embedding_model = SentenceTransformer(model_name)
-                except Exception as e:
-                    error_msg = str(e)
-                    if (
-                        "Can't load the model" in error_msg
-                        or "pytorch_model.bin" in error_msg
-                        or "safetensors" in error_msg
-                    ):
-                        log.warning(
-                            "⚠️ [System] 检测到历史下载中断导致模型缓存损坏，正在尝试自动修复..."
-                        )
-                        import shutil
-
-                        if hf_cache_dir.exists():
-                            shutil.rmtree(hf_cache_dir)
-                            log.info(
-                                "🧹 [System] 已清理损坏的半成品缓存，重新开始安全下载..."
-                            )
-
-                        self._embedding_model = SentenceTransformer(model_name)
-                    else:
-                        raise e
-
-                log.info("✅ [System] 语义缓存模型加载完毕，准备就绪！")
-            finally:
-                requests.Session.__init__ = old_requests_init
-                try:
-                    import httpx
-
-                    httpx.Client.__init__ = old_httpx_init
-                except ImportError:
-                    pass
-
-        return self._embedding_model
+        """获取句子向量模型（委托给专门的加载器）"""
+        return self._model_loader.load()
 
     def _get_embedding(self, text: str) -> list:
         return self._get_model().encode(text).tolist()
@@ -167,7 +84,7 @@ class CacheManager:
             if exact_key in entries:
                 matched_entry = entries[exact_key]
                 log.info(
-                    f"[Exact Cache Hit] {cache_type} 精确命中"
+                    f"🎯 [Exact Cache Hit] {cache_type} 命中"
                 )
 
                 matched_entry["metadata"]["last_accessed"] = datetime.now(

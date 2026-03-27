@@ -1,136 +1,130 @@
-# 🤖 Android AI 自动化测试录制器 (AI-Agent UI Recorder)
+# 🤖 Agentic UI Automation Framework (多端/多模态/智能体 UI 自动化引擎)
 
-这是一个基于大语言模型 (LLM) 和 uiautomator2 的 Android 自动化测试录制工具。通过简单的自然语言对话，AI 即可理解测试意图，自动寻找屏幕元素并执行操作，最终生成符合企业级最佳实践的 Pytest + Allure 测试脚本。
+这是一个基于大语言模型 (LLM) 和多模态视觉 (VLM) 的下一代跨端自动化测试探索与录制框架。
 
-# ✨ 核心特性
+项目已经从单纯的 "Human-in-the-loop" (人在环路交互录制) 进化为 **"Agent-in-the-loop" (智能体底层探索引擎)**。无论是人类通过自然语言聊天录制，还是外部超级 Agent (如 Claude Code, Cursor, AutoGen) 下发宏观指令，本引擎都能自主观察、推理、操作，并最终生成符合企业级最佳实践的 Pytest + Allure 测试脚本。
 
-🗣️ **自然语言驱动**：输入"点击登录"、"在账号框输入admin"，AI 自动完成元素定位与操作。
+## ✨ 核心特性
 
-⚡ **极致 Token 优化**：内置 Android XML 清洗降维算法，剔除冗余节点，Token 消耗降低 80% 以上，响应更快、成本更低。
+🗣️ **双模式驱动**：
 
-🛡️ **智能断言校验**：支持 `assert_exist` 和 `assert_text_equals` 等验证动作，保障测试有效性。
+- **交互录制模式**：像聊天一样控制手机，每一步生成标准代码，内置 L1 语义动作缓存省钱提速。
+- **Agentic 探索模式**：输入宏观目标（如“登录并验证失败提示”），引擎自主进行多步探索、闭环验证并生成完整脚本。
 
-📦 **企业级框架集成**：自动生成带有 `@allure.step` 的标准 `pytest` 脚本，无缝接入 CI/CD。
+👁️ **多模态视觉感知 (`--vision`)**：除了原有的 XML 降维清洗算法，还支持实时屏幕截图注入。在面对游戏界面、图表、Canvas 或复杂自绘 UI 时，开启视觉能力让 AI “看”得更准。
 
-📸 **失败自动截图**：配合 `conftest.py` 的高级 Hook，断言失败时自动截取手机屏幕并挂载到 Allure 报告中。
+🛡️ **自愈与防死循环 (Anti-Stagnation)**：内置 UI 僵死检测和智能熔断机制。遇到“无效点击”或“被遮挡”时，底层引擎会自动向大模型注入反馈，促使其改变策略；连续多次失败或页面卡死才会触发熔断退出，坚决杜绝 Token 浪费。
 
-🎬 **视频录制功能**：支持使用 scrcpy 自动录制测试执行视频，失败用例视频自动挂载到报告。
+📦 **跨平台大一统**：底层采用优雅的 Adapter 模式，一键切换操作目标：
 
-🌐 **多平台支持**：支持 Android (uiautomator2)、iOS (WDA)、Web (Playwright) 三大平台自动化测试。
+- `Android` (uiautomator2)
+- `iOS` (facebook-wda)
+- `Web` (Playwright)
 
-🔧 **多环境配置**：支持 dev、prod、us\_dev、us\_prod 四个环境的 App 配置切换。
+🎬 **全链路追踪与回放**：自动生成带有 `@allure.step` 的规范代码，支持断言自动失败截图，以及基于 Scrcpy/原生方案的**自动执行视频录制与报告挂载**。
 
-# 🛠️ 环境依赖与安装
+⚡ **极致 Token 优化**：内置 Android XML 清洗降维算法，剔除底层系统噪音、独立符号和巨型冗余节点，Token 消耗降低 80% 以上，响应更快、成本更低。
 
-## 1. 基础要求
+## 🛠️ 环境依赖与安装
+
+### 1. 基础要求
 
 - Python 3.8 或以上版本
 - 一台 Android 手机（或模拟器），已开启开发者模式和 USB 调试，并通过数据线连接到电脑
 
-## 2. 安装 Python 依赖库
+### 2. 安装 Python 依赖库
 
 在项目根目录下，执行以下命令安装所需依赖：
 
-```bash
+```
 pip install uiautomator2 openai pytest allure-pytest loguru
 ```
 
-## 3. 初始化 Android 设备
+*(注: 若需支持 iOS 或 Web，请自行补充安装 `facebook-wda` 或 `playwright` 依赖)*
+
+### 3. 初始化 Android 设备
 
 运行以下命令，向手机端推送 uiautomator2 的守护进程（ATX 应用）：
 
-```bash
+```
 python -m uiautomator2 init
 ```
 
-（注：首次执行时，手机上可能会弹出安装提示，请全部点击"允许"或"确认"。）
+*（注：首次执行时，手机上可能会弹出安装提示，请全部点击"允许"或"确认"。）*
 
-## 4. 安装 Allure 命令行工具 (用于生成可视化报告)
+### 4. 安装辅助工具 (Allure & Scrcpy)
 
-- macOS: `brew install allure`
-- Windows: 使用 Scoop 安装 (`scoop install allure`) 或前往 Allure GitHub Releases 下载解压并配置系统环境变量
+- **Allure 命令行工具 (用于生成可视化报告)**
+    - macOS: `brew install allure`
+    - Windows: 使用 Scoop 安装 (`scoop install allure`) 或前往 GitHub Releases 下载配置环境变量。
+- **Scrcpy (用于测试回放时的视频录制)**
+    - macOS: `brew install scrcpy`
+    - Windows: 前往 scrcpy 官方仓库下载。
 
-## 5. 安装 scrcpy (用于视频录制，可选)
+## ⚙️ 配置指南
 
-- macOS: `brew install scrcpy`
-- Windows: 前往 [scrcpy 官方仓库](https://github.com/Genymobile/scrcpy) 下载
+强烈建议通过环境变量配置，以避免提交代码时泄露敏感信息，或直接修改 `config/config.py` 文件：
 
-# ⚙️ 配置指南
-
-## 方式一：环境变量配置（推荐）
-
-强烈建议通过环境变量配置，以避免提交代码时泄露敏感信息：
-
-```bash
+```
 # 配置 API Key
 export OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxx"
 
 # 配置 Base URL（如使用第三方中转）
-export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_BASE_URL="https://ark.cn-beijing.volces.com/api/v3"
 
-# 配置模型名称
+# 配置模型名称 (推荐使用推理能力强、支持多模态的旗舰模型，如 gpt-4o, claude-3-5-sonnet)
 export MODEL_NAME="gpt-4o"
 ```
 
-## 方式二：直接修改配置文件
+**多环境配置**：项目支持 dev/prod/us_dev/us_prod 环境的 App 包名与 URL 配置切换，详见 `config/config.py` 中的 `APP_ENV_CONFIG`。
 
-打开 `config/config.py` 文件进行配置：
+## 🚀 核心工作流一：接入超级 Agent (Agentic Mode)
 
-```python
-# config/config.py
+这是本框架的**终极形态**。你可以将本框架作为底层 Tool/Skill 赋能给 Claude Code, Cursor 等外部超级 Agent。你可以让大模型直接阅读 `docs/AGENT_GUIDE.md` 学习如何调用此引擎。
 
-# 填入你可用的大模型 API Key (如 OpenAI、通义千问、DeepSeek 等兼容 OpenAI 格式的接口)
-OPENAI_API_KEY = "your-api-key-here"
+**典型用法**：
+在 Cursor 的 Terminal，或给 Claude Code 下发指令：
 
-# 如果使用第三方中转或私有部署模型，请修改 Base URL
-OPENAI_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
+> *"请阅读 `docs/AGENT_GUIDE.md`。产品新增了退出登录功能，请帮我自动写一个测试用例，保存为 `test_logout.py`，最后跑一遍 pytest。"*
+> 
 
-# 推荐使用推理能力较强的模型，如 gpt-4o, claude-3-5-sonnet 等
-MODEL_NAME = "doubao-seed-2-0-lite-260215"
+外部 Agent 会自动调用底层的 CLI 探索引擎：
 
-# 全局隐式等待时间（秒），缓解页面异步加载导致的找不到元素问题
-DEFAULT_TIMEOUT = 5.0
+```
+python agent_cli.py --goal "进入设置并退出登录，最后断言出现登录按钮" \
+                    --output "test_cases/test_logout.py" \
+                    --platform android \
+                    --vision \
+                    --max_retries 3
 ```
 
-## 环境配置
+### CLI 核心参数说明
 
-项目支持多环境切换，修改 `config/config.py` 中的 `APP_ENV_CONFIG`：
+- `-goal`: (必填) 宏观测试目标，必须包含操作流程和最终断言标准。
+- `-output`: (可选) 脚本输出的绝对或相对路径。
+- `-platform`: (可选) 目标平台 (`android` | `ios` | `web`)。
+- `-vision`: (可选 Flag) 开启多模态视觉辅助（建议在遇到复杂图形时开启）。
+- `-context`: (可选) 传入包含 PRD、帐号密码等复杂规则的临时 txt/md 文件路径。
+- `-max_retries`: (可选) 熔断阈值：单步操作的最大连续容错重试次数，默认 3。
 
-```python
-APP_ENV_CONFIG = {
-    "dev": {
-        "android": "",
-        "ios": "",
-        "web": "",
-    }
-}
+引擎在探测完成后，若成功会以 `Exit Code 0` 退出，失败或熔断则以 `Exit Code 1` 退出，供上层 Agent 捕获并进行自省重试。
+
+## 💻 核心工作流二：人机交互录制 (Interactive Mode)
+
+如果您希望手动、一步一步地把控录制细节，可以启动原汁原味的交互式引擎：
+
 ```
-
-# 🚀 快速上手 (使用流程)
-
-## 第一步：启动 AI 录制引擎
-
-确保手机停留在你想测试的 App 页面，在终端运行：
-
-```bash
 python main.py
 ```
 
-## 第二步：交互式生成脚本
-
 终端会提示你输入指令，你可以像聊天一样控制手机：
 
-```bash
+```
 👉 请输入自然语言指令 (输入 'q' 退出): 点击"我的"标签页
 [System] 抓取并压缩 XML 树...
 [Action] 正在等待并点击: text='我的'
 
-👉 请输入自然语言指令 (输入 'q' 退出): 点击右上角的设置图标
-[System] 抓取并压缩 XML 树...
-[Action] 正在等待并点击: description='设置'
-
 👉 请输入自然语言指令 (输入 'q' 退出): 校验页面上出现了"退出登录"字样
-[System] 抓取并压缩 XML 树...
 [Assert] 校验元素存在: text='退出登录'
 [Assert] ✅ 校验通过
 
@@ -138,132 +132,60 @@ python main.py
 🎉 录制结束！
 ```
 
-## 第三步：回放测试用例
+此模式下，框架默认开启 **本地 L1/L2 语义缓存 (`CacheManager`)**，相似的 UI 树和指令将实现极速匹配，避免重复消耗大模型 API 费用。同时支持输入 `u` (Undo) 撤销上一步操作。
 
-录制结束后，代码已自动生成在 `test_cases/test_auto_generated.py` 中。直接使用 `pytest` 运行（全程不再消耗 AI API 额度）：
-
-```bash
-# 运行所有测试用例
-pytest
-
-# 运行指定用例
-pytest test_cases/test_auto_generated.py
-
-# 指定平台运行（android/ios/web）
-pytest --platform=android
-```
-
-## 第四步：查看 Allure 测试报告
-
-回放完成后，会在 `./report/allure-results` 目录下生成原始数据。运行以下命令开启可视化报告：
-
-```bash
-allure serve ./report/allure-results
-```
-
-此时浏览器会自动打开，你可以查看到带有详细执行步骤和（如果失败）错误截图的精美测试报告！
-
-# 📁 项目结构说明
+## 📁 项目结构说明
 
 ```
 ui_agent/
-├── main.py                  # AI 录制引擎入口
-├── conftest.py              # Pytest 夹具与多平台适配器
+├── agent_cli.py             # 🤖 (Agentic) 供超级 Agent 调用的自主探索引擎入口
+├── main.py                  # 🙋‍♂️ (Interactive) 人机交互式录制引擎入口
+├── conftest.py              # Pytest 核心夹具，跨平台调度与视频/截图报告挂载
 ├── pytest.ini               # Pytest 运行规则配置
 ├── config/
-│   └── config.py            # 全局配置 (API Keys, 超时, 环境配置)
+│   └── config.py            # 全局配置 (API Keys, 超时, 多环境配置)
 ├── common/
-│   ├── ai.py                # AI 交互层：Prompt 构造与 JSON 解析
-│   ├── executor.py          # 动作执行器：处理 click/input/assert 操作
-│   ├── logs.py              # 日志模块
-│   └── adapters/
-│       ├── __init__.py        # 导出所有适配器
-│       ├── base_adapter.py    # 基础适配器，定义通用接口
-│       ├── android_adapter.py # Android uiautomator2 适配器
-│       ├── ios_adapter.py     # iOS facebook-wda 适配器
-│       └── web_adapter.py     # Web Playwright 适配器
+│   ├── ai.py                # AI 交互基础层 (单步解析与缓存)
+│   ├── ai_autonomous.py     # 🤖 自主推理大脑 (带自愈、多模态支持、记忆流)
+│   ├── executor.py          # 动作物理执行器与 Python 代码生成
+│   ├── history_manager.py   # 历史记录管理器与代码回滚流控制
+│   ├── cache/               # 本地混合语义缓存系统 (精准匹配+向量检索)
+│   └── adapters/            # 📱 跨平台多端底层适配器 (Android/iOS/Web)
+├── docs/
+│   ├── AGENT_GUIDE.md       # 超级 Agent 协作规范 (喂给 Claude/Cursor)
+│   └── skills/              # Agent Tool 描述文件 (如 execute_ui_automation.md)
 ├── utils/
-│   └── utils_xml.py         # Android XML 清洗与降维算法
-└── test_cases/
-    └── test_auto_generated.py  # AI 自动生成的测试用例
+│   └── utils_xml.py         # Android XML 清洗与降维算法，极致省 Token
+└── test_cases/              # 自动生成的自动化测试脚本存放目录
 ```
 
-## 模块说明
+## ❓ 常见问题 (FAQ)
 
-| 模块                  | 说明                                       |
-| ------------------- | ---------------------------------------- |
-| main.py             | 录制引擎入口，负责设备连接、UI 抓取、AI 决策、动作执行           |
-| conftest.py         | Pytest 夹具层，提供设备 fixture、失败截图 Hook、跨平台适配器 |
-| config/config.py    | 全局配置管理，支持 API Keys、超时时间、多环境 App 配置       |
-| common/ai.py        | AI 交互层，构造 Prompt 发送给大模型，解析 JSON 动作指令     |
-| common/executor.py  | 动作执行器，实现 click/input/assert 等操作的执行与代码生成  |
-| common/logs.py      | 日志模块，基于 loguru 提供统一的日志输出                 |
-| utils/utils\_xml.py | XML 清洗降维算法，提取关键交互节点，降低 Token 消耗          |
-
-# ❓ 常见问题 (FAQ)
-
-## Q1: 运行时报错 DeviceNotFoundError 或连接设备失败怎么办？
-
+**Q1: 运行时报错 DeviceNotFoundError 或连接设备失败怎么办？**
 确保手机已连上 USB 调试。可以使用 `adb devices` 命令查看是否有设备在线。如果有设备，请再次执行 `python -m uiautomator2 init`。
 
-## Q2: 大模型频繁返回乱码或无法解析动作？
+**Q2: 大模型频繁返回乱码或无法解析动作？**
+检查 `config.py` 中的 `MODEL_NAME`。UI 结构理解需要较强的逻辑推理能力，推荐使用千亿参数级别的旗舰模型 (如 GPT-4o, Claude 3.5)。如果是国内大模型，建议使用具有强大代码/JSON 输出能力的模型。
 
-检查 config.py 中的 MODEL\_NAME。UI 结构理解需要较强的逻辑推理能力，推荐使用千亿参数级别的旗舰模型。如果是国内大模型，建议使用具有强大代码/JSON 输出能力的模型。
+**Q3: 录制时点击了，但脚本回放时找不到元素报错？**
+可能是由于页面动画或网络加载延迟导致。可以在 `config.py` 中适当增大 `DEFAULT_TIMEOUT`（默认 5.0 秒）以增加容错率。
 
-## Q3: 录制时点击了，但脚本回放时找不到元素报错？
+**Q4: `--vision` 参数什么时候需要开启？**
+如果你的测试页面是标准的 Android Native 页面，通常仅靠 XML 压缩算法（默认）就足够了，速度快且便宜。但如果你在测试复杂的 Web H5 画布、Unity 游戏界面，或是遇到了动态乱码 `resource-id`，强烈建议追加 `--vision` 参数，让多模态大模型结合截图精准定位。
 
-可能是由于页面动画或网络加载延迟导致。可以在 config.py 中适当增大 DEFAULT\_TIMEOUT（默认 5.0 秒）以增加容错率。
+**Q5: 为什么 `agent_cli.py` 跑着跑着报错退出了？**
+这是触发了**自愈熔断机制**。如果引擎在一个页面连续多次尝试执行动作失败（例如被遮挡），或是 UI 发生“僵死”（点完页面毫无反应），在达到 `--max_retries` 阈值后，它会主动带着非 0 状态码中止，防止大模型陷入无限死循环。此时请查看输出日志修改你的 `--goal` 或补充前置上下文。
 
-## Q4: 视频录制功能无法使用？
+**Q6: 视频录制功能无法使用？**
+确保已安装 scrcpy。运行 `scrcpy --version` 验证安装。如果仍然失败，检查手机是否授权了屏幕录制权限。失败用例的视频会自动挂载到 Allure 报告中。
 
-确保已安装 scrcpy。运行 `scrcpy --version` 验证安装。如果仍然失败，检查手机是否授权了屏幕录制权限。
+## 🐛 问题报告指南
 
-## Q5: 如何切换测试环境？
+如遇问题，请按以下格式提交反馈：
 
-目前环境切换需要修改 `config/config.py` 中的 `APP_ENV_CONFIG`，或在代码中调用 `launch_app(device, env_name="prod")` 指定环境。
-
-# 🐛 问题报告指南
-
-## 报告格式
-
-请按以下格式提交问题：
-
-```
-## 问题描述
-[简洁描述遇到的问题]
-
-## 复现步骤
-1. [第一步]
-2. [第二步]
-3. [第三步]
-
-## 预期行为
-[描述你期望发生的行为]
-
-## 实际行为
-[描述实际发生的行为]
-
-## 环境信息
-- 操作系统: [如 macOS 14.0]
-- Python 版本: [如 3.11.5]
-- 手机型号: [如 Samsung Galaxy S21]
-- 手机系统版本: [如 Android 13]
-- 项目版本/提交哈希: [如 abc1234]
-
-## 错误日志
-[粘贴完整的错误日志]
-
-## 附加信息
-[任何其他有助于解决问题的信息]
-```
-
-## 必要信息
-
-请确保提供以下信息：
-
-1. **复现步骤**：清晰的操作步骤，让我们能重现问题
-2. **错误日志**：完整的错误信息，包括堆栈跟踪
-3. **环境信息**：操作系统、Python 版本、手机型号等
+1. **复现步骤**：清晰的操作步骤或触发命令
+2. **错误日志**：完整的错误信息（包括堆栈跟踪）
+3. **环境信息**：操作系统、Python 版本、手机型号/系统版本
 4. **截图/录像**：如果涉及 UI 问题，提供相关截图或录像
 
 ## 提交方式

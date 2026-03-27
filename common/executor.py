@@ -32,7 +32,7 @@ class ClickHandler(ActionHandler):
         ]
 
     def get_log_message(self, l_type: str, l_value: str, extra_value: str) -> str:
-        return f"[Action] 正在等待并点击: {l_type}='{l_value}'"
+        return f"✅ [Action] 正在等待并点击: {l_type}='{l_value}'"
 
 
 class InputHandler(ActionHandler):
@@ -68,10 +68,10 @@ class AssertExistHandler(ActionHandler):
             f"    with allure.step('断言: 验证元素 [{l_value}] 存在'):\n",
             f"        log.info('执行断言: 检查元素 [{l_value}] 是否存在')\n",
             f"        is_exist = d({u2_key}='{l_value}').wait(timeout={timeout})\n",
-            f"        if not is_exist:\n",
+            "        if not is_exist:\n",
             f"            log.error('断言失败: 期望元素 [{l_value}] 未出现')\n",
             f"        assert is_exist, '断言失败: 期望元素 {l_value} 未出现'\n",
-            f"        log.info('断言成功: 元素已出现')\n"
+            "        log.info('断言成功: 元素已出现')\n"
         ]
 
     def get_log_message(self, l_type: str, l_value: str, extra_value: str) -> str:

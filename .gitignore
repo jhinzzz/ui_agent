@@ -7,12 +7,15 @@
 .venv/
 
 # 项目缓存
-.cache/
-.DS_Store
 __pycache__/
 .pytest_cache/
+.test_cache/
+.cache/
 *.pyc
+*.DS_Store
 
 # IDE 缓存
 .qoder/
 .trae/
+
+.env

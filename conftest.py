@@ -8,7 +8,7 @@ from common.logs import log
 from common.adapters import AndroidU2Adapter, IosWdaAdapter, WebPlaywrightAdapter
 
 # ==============================================================
-# Pytest 命令行注册（仅保留Pytest相关）
+# Pytest 命令行注册
 # ==============================================================
 def pytest_addoption(parser):
     parser.addoption(
@@ -17,7 +17,7 @@ def pytest_addoption(parser):
     )
 
 # ==============================================================
-# 全局变量 & 夹具（仅保留Pytest相关）
+# 全局变量 & 夹具
 # ==============================================================
 _adapter = None  # 全局适配器实例
 
