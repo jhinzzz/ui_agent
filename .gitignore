@@ -19,3 +19,10 @@ __pycache__/
 .trae/
 
 .env
+.env.local
+.env.*.local
+*.key
+id_rsa*
+
+test_cases/
+report/

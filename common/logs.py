@@ -1,10 +1,10 @@
 import os
 import time
+import uuid
 from datetime import datetime
 import sys
 from loguru import logger
 
-# 获取当前文件所在目录
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS_DIR = os.path.join(BASE_DIR, "logs")
 
@@ -23,7 +23,8 @@ def _generate_logs_dir():
 def _init_logger():
     log_dir = _generate_logs_dir()
     log_time = datetime.now().strftime("%H:%M:%S")
-    log_file = f"{log_dir}/test_{log_time}.log"
+    log_id = str(uuid.uuid4())[:8]
+    log_file = f"{log_dir}/test_{log_time}_{log_id}.log"
 
     logger.remove()
 
@@ -45,7 +46,7 @@ def _init_logger():
         rotation="1 day",
         retention="7 days",
         compression="zip",
-        enqueue=False,
+        enqueue=True,
         catch=True,
         serialize=False
     )
@@ -82,9 +83,5 @@ class Logger:
         else:
             logger.error(msg)
 
-log = Logger()
 
-# log.info("这是一条 info 日志")
-# log.debug("这是一条 debug 日志")
-# log.warning("这是一条 warning 日志")
-# log.error("这是一条 error 日志")
+log = Logger()

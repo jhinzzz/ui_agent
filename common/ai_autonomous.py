@@ -11,6 +11,7 @@ class AutonomousBrain(AIBrain):
         context: str,
         ui_json: str,
         history: list,
+        platform: str = "android",
         last_error: str = "",
         screenshot_base64: str = None,
     ) -> dict:
@@ -40,13 +41,17 @@ class AutonomousBrain(AIBrain):
             vision_prompt = "\n👁️ 【视觉辅助】: 你同时收到了一张真实屏幕截图。请结合视觉画面与 UI 树，更精准地理解页面布局、按钮状态。如果 XML 树混乱，请以视觉画面为准。"
 
         system_prompt = f"""
-        你是一个完全自主的 {'多模态视觉' if screenshot_base64 else '纯文本'} 高级自动化测试 Agent。
+        你是一个完全自主的{platform} {'多模态视觉' if screenshot_base64 else '纯文本'} 高级自动化测试 Agent。
         你需要根据用户的【宏观测试目标】、【参考上下文】、【已执行的历史步骤】以及【当前屏幕 UI 树】{'和【屏幕截图】' if screenshot_base64 else ''}，自主决定下一步需要执行什么动作。
         {vision_prompt}
 
         允许的 action 类型:
         - "click": 点击元素
-        - "input": 在输入框中输入内容
+        - "long_click": 长按元素
+        - "hover": 悬停元素 (针对 Web 端，触发下拉菜单等交互)
+        - "input": 在输入框中输入内容 (需通过 extra_value 参数提供内容)
+        - "swipe": 滑动屏幕寻找不在视口内的元素。必须在 extra_value 填入 "up", "down", "left" 或 "right"。此时 locator_type 填 "global"。
+        - "press": 模拟键盘或物理系统按键。必须在 extra_value 填入按键名 (如 "Enter", "Back")。此时 locator_type 填 "global"。
         - "assert_exist": 校验某个元素是否在页面上出现
         - "assert_text_equals": 校验某个元素的文本是否与期望值一致
 
@@ -88,11 +93,23 @@ class AutonomousBrain(AIBrain):
             )
 
         if screenshot_base64:
-            active_client = getattr(self, "vision_client", self.text_client)  # 兼容配置
+            active_client = getattr(self, "vision_client", None) or getattr(
+                self, "text_client", None
+            )  # 兼容配置
             active_model = config.VISION_MODEL_NAME
         else:
-            active_client = getattr(self, "text_client", self.client)
+            active_client = getattr(self, "text_client", None) or getattr(
+                self, "client", None
+            )
             active_model = config.MODEL_NAME
+
+        if not active_client:
+            log.error("❌ [Error] 未找到可用的模型客户端，无法继续自主决策")
+            return {
+                "status": "failed",
+                "thought": "模型客户端未初始化",
+                "result": {},
+            }
 
         log.info(f"🤖 [Autonomous] 正在使用模型 [{active_model}] 深度思考策略...")
 

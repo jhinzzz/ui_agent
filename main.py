@@ -14,6 +14,7 @@ from common.history_manager import StepHistoryManager
 from common.adapters import AndroidU2Adapter, IosWdaAdapter, WebPlaywrightAdapter
 import config.config as config
 from utils.utils_xml import compress_android_xml
+from utils.utils_web import compress_web_dom
 
 
 def get_initial_header() -> list:
@@ -28,13 +29,13 @@ def get_initial_header() -> list:
         "@allure.story('AI 自动录制场景')\n",
         # 参数 d 即调用 conftest.py 中的 fixture
         "def test_auto_generated_case(d):\n",
-        '    """回放自动录制的 UI 步骤"""\n',
+        '    """回放自动录制的 UI 步骤。对于 Web 端，参数 d 代表 Playwright 的 page 对象"""\n'
     ]
 
 
 def save_to_disk(file_path: str, content: list) -> None:
     """安全的原子化文件写入，防止因断电等原因导致测试脚本被清空"""
-    log.debug(f"[SaveToDisk] 脚本保存至 {file_path}, 内容长度: {len(content)}")
+    log.debug(f"⏳ [SaveToDisk] 脚本保存至 {file_path}, 内容长度: {len(content)}")
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
     # 先写入临时文件
@@ -48,15 +49,15 @@ def save_to_disk(file_path: str, content: list) -> None:
 
 def launch_app(device, env_name="dev", system="android"):
     """启动指定环境的 App"""
-    app = _get_app_config(env_name, system)
-    if app and system == "android":
-        device.app_start(app)
-        log.info(f"✅ App 已启动: {app}")
-
-
-def _get_app_config(env_name="dev", system="android"):
-    """获取指定环境的 App 配置"""
-    return config.APP_ENV_CONFIG.get(env_name, {}).get(system)
+    app_target = config.APP_ENV_CONFIG.get(env_name, {}).get(system)
+    if not app_target:
+        return
+    if system == "android":
+        device.app_start(app_target)
+        log.info(f"✅ Android App 已启动: {app_target}")
+    elif system == "web":
+        device.goto(app_target)
+        log.info(f"✅ Web 浏览器已导航至: {app_target}")
 
 
 def main():
@@ -71,6 +72,10 @@ def main():
     parser.add_argument("--env", type=str, default="dev", help="测试环境")
     args = parser.parse_args()
 
+    if not config.validate_config():
+        log.error("❌ [Config] 配置校验失败，请检查上述错误信息")
+        sys.exit(1)
+
     # 动态目录
     base_dir = os.path.abspath(os.path.dirname(__file__))
     platform_dir = os.path.join(base_dir, "test_cases", args.platform)
@@ -83,41 +88,41 @@ def main():
     log.info(f"📁 临时存档路径: {current_script_path}")
     log.info("=" * 50)
 
+    adapter = None
     try:
-        # 使用工厂模式根据参数分发适配器，取代写死的 u2.connect()
-        if args.platform == "android":
-            adapter = AndroidU2Adapter()
-        elif args.platform == "ios":
-            adapter = IosWdaAdapter()
-        elif args.platform == "web":
-            adapter = WebPlaywrightAdapter()
-        else:
-            raise ValueError(f"不支持的平台: {args.platform}")
+        try:
+            # 使用工厂模式根据参数分发适配器，取代写死的 u2.connect()
+            if args.platform == "android":
+                adapter = AndroidU2Adapter()
+            elif args.platform == "ios":
+                adapter = IosWdaAdapter()
+            elif args.platform == "web":
+                adapter = WebPlaywrightAdapter()
+            else:
+                raise ValueError(f"不支持的平台: {args.platform}")
 
-        adapter.setup()
-        device = adapter.driver
-        log.info(f"✅ {args.platform} 平台已连接并初始化完成")
-    except Exception as e:
-        log.error(f"❌ 设备/浏览器连接失败: {e}")
-        sys.exit(1)
+            adapter.setup()
+            device = adapter.driver
+            log.info(f"✅ {args.platform} 平台已连接并初始化完成")
+            launch_app(device, args.env, args.platform)
+        except Exception as e:
+            log.error(f"❌ [Error] 设备/浏览器连接失败: {e}")
+            sys.exit(1)
 
-    launch_app(device, args.env, args.platform)
+        # 初始化历史管理器，传入初始头部内容
+        initial_header = get_initial_header()
+        history_manager = StepHistoryManager(initial_content=initial_header)
 
-    # 初始化历史管理器，传入初始头部内容
-    initial_header = get_initial_header()
-    history_manager = StepHistoryManager(initial_content=initial_header)
+        # 保存初始文件到磁盘
+        save_to_disk(current_script_path, initial_header)
+        log.info(f"✅ 测试脚本已创建: {current_script_path}")
+        log.info("✅ 待操作 AI 填入测试用例内容")
 
-    # 保存初始文件到磁盘
-    save_to_disk(config.OUTPUT_SCRIPT_FILE, initial_header)
-    log.info(f"✅ 测试脚本已创建: {config.OUTPUT_SCRIPT_FILE}")
-    log.info("✅ 待操作 AI 填入测试用例内容")
+        brain = AIBrain()
+        executor = UIExecutor(device, platform=args.platform)
 
-    brain = AIBrain()
-    executor = UIExecutor(device)
+        vision_mode = False  # 热插拔视觉多模态开关
 
-    vision_mode = False  # 热插拔视觉多模态开关
-
-    try:
         while True:
             history_count = history_manager.get_history_count()
             cache_status = "✅" if brain.cache_manager.enabled else "❌"
@@ -146,7 +151,7 @@ def main():
                     else:
                         log.warning(f"⚠️ [Warning] 无法重命名，源文件异常丢失: {current_script_path}")
 
-                log.info(f"🏁 [System] 用例已成功落地: {current_script_path}")
+                log.info(f"✅ [System] 用例已成功保存至: {current_script_path}")
                 log.info(f"▶️ [System] 运行命令验证: pytest {current_script_path}")
                 break
 
@@ -182,19 +187,19 @@ def main():
 
             if cmd.lower() == "cache-on":
                 brain.cache_manager.enabled = True
-                log.info("✅ 缓存已启用")
+                log.info("✅ [Cache] 缓存已启用")
                 continue
 
             if cmd.lower() == "cache-off":
                 brain.cache_manager.enabled = False
-                log.info("❌ 缓存已禁用")
+                log.info("❌ [Cache] 缓存已禁用")
                 continue
 
             if cmd.lower() == "cache-clear":
                 if brain.cache_manager.clear():
-                    log.info("🗑️ 缓存已清空")
+                    log.info("🗑️ [Cache] 缓存已清空")
                 else:
-                    log.error("❌ 清空缓存失败")
+                    log.error("❌ [Error] 清空缓存失败")
                 continue
 
             # 回滚操作
@@ -203,12 +208,12 @@ def main():
                 history_count_before = history_manager.get_history_count()
 
                 if not last_step:
-                    log.warning("⚠️ 无可撤销的步骤")
+                    log.warning("⚠️ [Warning] 无可撤销的步骤")
                     continue
 
                 # 显示最后一步的信息并请求确认
                 log.info(f"\n{'-' * 60}")
-                log.info("⚠️  即将回滚以下操作:")
+                log.info("⚠️ [Warning] 即将回滚以下操作:")
                 log.info(f"    - 时间: {last_step['timestamp']}")
                 log.info(f"    - 动作: {last_step['action_description']}")
                 log.info(f"    - 当前历史步数: {history_count_before}")
@@ -217,7 +222,7 @@ def main():
                 confirm = input("确认撤销此操作? (y/N，默认不撤销): ").strip().lower()
 
                 if confirm != "y":
-                    log.info("🔒 回滚操作已取消")
+                    log.info("🔒 [Rollback] 回滚操作已取消")
                     continue
 
                 # 执行回滚
@@ -237,19 +242,22 @@ def main():
                 continue
 
             try:
-                # 等待 App 空闲（仅安卓生效）
+                # 等待 App 空闲
                 if args.platform == "android":
                     device.wait_activity(device.app_current()["activity"], timeout=3)
+                elif args.platform == "web":
+                    device.wait_for_load_state("domcontentloaded")
             except Exception:
                 time.sleep(1)
 
             log.info("⏳ [System] 抓取页面结构与截图...")
 
-            ui_json = (
-                compress_android_xml(device.dump_hierarchy())
-                if args.platform == "android"
-                else "{}"
-            )
+            if args.platform == "android":
+                ui_json = compress_android_xml(device.dump_hierarchy())
+            elif args.platform == "web":
+                ui_json = compress_web_dom(device)
+            else:
+                ui_json = "{}"
 
             # 多模态视觉注入
             screenshot_base64 = None
@@ -258,7 +266,7 @@ def main():
                     img_bytes = adapter.take_screenshot()
                     screenshot_base64 = base64.b64encode(img_bytes).decode("utf-8")
                 except Exception as e:
-                    log.warning(f"⚠️ 截图失败，将降级为纯文本模型: {e}")
+                    log.warning(f"⚠️ [Warning] 截图失败，将降级为纯文本模型: {e}")
 
             current_history = history_manager.get_history()
             # 取最近 5 条历史记录作为上下文
@@ -268,6 +276,7 @@ def main():
             action_data = brain.get_action(
                 instruction=cmd,
                 ui_json=ui_json,
+                platform=args.platform,
                 screenshot_base64=screenshot_base64,
                 chat_history=recent_context
             )
@@ -281,6 +290,22 @@ def main():
                 if result["code_lines"]:
                     log.debug(f"[Debug] 生成的代码行: {result['code_lines']}")
 
+                if not result.get("success"):
+                    log.warning("⚠️ [Warning] 动作物理执行受阻 (可能是缓存过期或页面发生了微小变动)！")
+                    log.warning("⚠️ [Warning] 触发引擎自愈机制，正在强制绕过缓存重新呼叫大模型...")
+
+                    action_data_retry = brain.get_action(
+                        instruction=cmd,
+                        ui_json=ui_json,
+                        platform=args.platform,
+                        screenshot_base64=screenshot_base64,
+                        chat_history=recent_context,
+                        skip_cache=True  # 强行避开缓存
+                    )
+
+                    if action_data_retry:
+                        result = executor.execute_and_record(action_data_retry)
+
                 if result.get("success"):
                     log.debug("[Debug] 执行动作成功，添加到历史记录")
                     history_manager.add_step(result["code_lines"], result["action_description"])
@@ -292,7 +317,7 @@ def main():
                     # 保存到磁盘
                     save_to_disk(current_script_path, history_manager.get_current_file_content())
                     log.debug(
-                        f"[Debug] 已保存 {len(result['code_lines'])} 行代码到 {config.OUTPUT_SCRIPT_FILE}"
+                        f"[Debug] 已保存 {len(result['code_lines'])} 行代码到 {current_script_path}"
                     )
                 else:
                     log.error("[System] ❌ 执行动作失败")
@@ -303,10 +328,11 @@ def main():
         log.warning("\n⚠️ 收到中断信号 (KeyboardInterrupt)，正在安全退出...")
     finally:
         # 安全断开设备释放资源
-        try:
-            adapter.teardown()
-        except Exception as e:
-            log.warning(f"⚠️ [Warning] 清理资源时发生异常: {e}")
+        if adapter:
+            try:
+                adapter.teardown()
+            except Exception as e:
+                log.warning(f"⚠️ [Warning] 清理资源时发生异常: {e}")
 
 
 if __name__ == "__main__":

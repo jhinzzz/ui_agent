@@ -1,11 +1,45 @@
-import xml.etree.ElementTree as ET
+try:
+    import defusedxml.ElementTree as ET
+except ModuleNotFoundError:
+    import xml.etree.ElementTree as ET
 import json
 import re
+
+_PATTERN_NOISE = re.compile(r'^[\$\¥\€\£\d\.\,\+\-\%]+$')
+_PATTERN_HASH_SUFFIX = re.compile(r'_[a-f0-9]{8}$')
+
+def _should_filter_by_text(text: str, clickable: bool) -> bool:
+    if clickable:
+        return False
+    if len(text) <= 5 and _PATTERN_NOISE.match(text):
+        return True
+    return False
+
+def _should_filter_by_id(res_id: str) -> bool:
+    if not res_id:
+        return False
+    return "com.android.systemui" in res_id
+
+def _should_filter_by_desc(desc: str) -> bool:
+    if not desc:
+        return False
+    if "OpenVPN" in desc or "VoLTE" in desc:
+        return True
+    if len(desc) > 30 and "0, 1, 2" in desc:
+        return True
+    return False
+
+def _clean_resource_id(res_id: str) -> str:
+    clean_id = res_id.split("/")[-1]
+    clean_id = _PATTERN_HASH_SUFFIX.sub('', clean_id)
+    return clean_id
 
 def compress_android_xml(raw_xml: str) -> str:
     try:
         root = ET.fromstring(raw_xml)
-    except ET.ParseError:
+    except ET.ParseError as e:
+        raw_preview = raw_xml[:200] if raw_xml else "(empty)"
+        print(f"[Warning] XML 解析失败: {e}, 原始内容前200字符: {raw_preview}")
         return '{"ui_elements": []}'
 
     elements = []
@@ -18,27 +52,15 @@ def compress_android_xml(raw_xml: str) -> str:
         clickable = attrib.get("clickable") == "true"
         node_class = attrib.get("class", "").split(".")[-1]
 
-        # ==========================================
-        # 节约 Token
-        # ==========================================
-
-        # 1. 抛弃底层系统噪音和通知图标
-        if "com.android.systemui" in res_id or "OpenVPN" in desc or "VoLTE" in desc:
+        if _should_filter_by_id(res_id):
             continue
 
-        # 2. 致命拦截：抛弃派网特有的“变态轮盘/数字碎片轴”
-        # 这种 desc 往往超长，包含无数个逗号分隔的数字
-        if len(desc) > 30 and "0, 1, 2" in desc:
+        if _should_filter_by_desc(desc):
             continue
 
-        # 3. 抛弃纯粹的独立符号/单数字 (如单独渲染的 "$", ",", "+", "1")
-        # 如果它不可点击，且完全由单字符或纯数字标点组成，大模型不需要看它
-        if not clickable and re.match(r'^[\$\¥\€\£\d\.\,\+\-\%]+$', text) and len(text) <= 5:
+        if _should_filter_by_text(text, clickable):
             continue
 
-        # ==========================================
-        # 组装发给大模型的有效节点
-        # ==========================================
         if text or desc or clickable:
             el_info = {"class": node_class}
             if text: el_info["text"] = text
@@ -46,9 +68,7 @@ def compress_android_xml(raw_xml: str) -> str:
             if clickable: el_info["clickable"] = True
 
             if res_id:
-                # 只取 ID 最后一部分，并去掉可能导致失效的 8 位随机后缀
-                clean_id = res_id.split("/")[-1]
-                clean_id = re.sub(r'_[a-f0-9]{8}$', '', clean_id)
+                clean_id = _clean_resource_id(res_id)
                 el_info["id"] = clean_id
 
             elements.append(el_info)

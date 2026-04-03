@@ -37,7 +37,7 @@ class AIBrain:
         if (
             not loc_type
             or not loc_val
-            or loc_type not in ["text", "description", "resourceId"]
+            or loc_type not in ["text", "description", "resourceId", "id"]
         ):
             return True
 
@@ -47,7 +47,7 @@ class AIBrain:
                 return True
             if loc_type == "description" and el.get("desc") == loc_val:
                 return True
-            if loc_type == "resourceId" and el.get("id") == loc_val:
+            if loc_type in ["resourceId", "id"] and el.get("id") == loc_val:
                 return True
 
         return False
@@ -56,8 +56,10 @@ class AIBrain:
         self,
         instruction: str,
         ui_json: str,
+        platform: str = "android",
         screenshot_base64: str = None,
         chat_history: list = None,
+        skip_cache: bool = False
     ) -> dict:
         """
         向大模型发送指令并返回结构化动作 JSON。
@@ -70,24 +72,24 @@ class AIBrain:
         # ==========================================
         # 1. 缓存读取与物理校验阶段
         # ==========================================
-        cached_l1 = self.cache_manager.get(instruction, ui_dict)
-        if cached_l1 is not None:
-            log.info("🎯 [Cache] 命中页面级精准缓存 (L1-Action)")
-            return cached_l1
+        if not skip_cache:
+            cached_l1 = self.cache_manager.get(instruction, ui_dict, platform)
+            if cached_l1 is not None:
+                log.info("🎯 [Cache] 命中页面级精准缓存 (L1-Action)")
+                return cached_l1
 
-        if hasattr(self.cache_manager, "get_chat_simple"):
-            cached_l2 = self.cache_manager.get_chat_simple(instruction)
-            if cached_l2 is not None:
-                # 在当前页面观察元素是否存在，若不存在则放弃缓存
-                if self._verify_locator_in_ui(cached_l2, ui_dict):
-                    log.info("🎯 [Cache] 命中全局语义缓存 (L2-Semantic)")
-                    return cached_l2
-                else:
-                    log.warning(
-                        "⚠️ [Cache] 语义缓存虽命中，但目标元素在当前页面不存在，已放弃该缓存..."
-                    )
+            if hasattr(self.cache_manager, "get_chat_simple"):
+                cached_l2 = self.cache_manager.get_chat_simple(instruction, platform)
+                if cached_l2 is not None:
+                    if self._verify_locator_in_ui(cached_l2, ui_dict):
+                        log.info("🎯 [Cache] 命中全局语义缓存 (L2-Semantic)")
+                        return cached_l2
+                    else:
+                        log.warning("⚠️ [Cache] 语义缓存虽命中，但目标元素在当前页面不存在，已丢弃该缓存...")
 
-        log.info("❌ [Cache Miss] 缓存未命中，准备请求大模型 API...")
+            log.info("🐌 [Cache Miss] 缓存未命中，准备请求大模型 API...")
+        else:
+            log.info("🚫 [System] 已强制跳过缓存，请求大模型进行深度重思考...")
         # ==========================================
         # 2. 处理上下文历史 (触发大模型 Prompt Caching)
         # ==========================================
@@ -111,7 +113,7 @@ class AIBrain:
                 你同时收到了一张真实屏幕截图。请优先结合视觉画面判断页面结构和元素状态！如果 XML 树找不到或者混乱，以视觉为准。
             """
         system_prompt = f"""
-        # Role: 自动化测试策略生成专家
+        # Role: {platform} 自动化测试策略生成专家
 
         ## Profile
         - language: 中文
@@ -152,11 +154,16 @@ class AIBrain:
         ## 📋 执行协议 (Protocol)
         {vision_prompt}
 
-        ### 允许的 Action 类型
+        ### 允许的 action 类型:
         - "click": 点击元素
-        - "input": 在输入框中输入内容
+        - "long_click": 长按元素
+        - "hover": 悬停元素 (针对 Web 端，触发下拉菜单显示等交互)
+        - "input": 在输入框中输入内容 (必须在 extra_value 字段提供输入内容)
+        - "swipe": 滑动屏幕以寻找不在视口内的元素。必须在 extra_value 填入 "up", "down", "left" 或 "right"。此时 locator_type 填 "global"。
+        - "press": 模拟键盘或物理系统按键。必须在 extra_value 填入按键名 (如 "Enter", "Back", "Home")。此时 locator_type 填 "global"。
         - "assert_exist": 校验某个元素是否在页面上出现
         - "assert_text_equals": 校验某个元素的文本是否与期望值一致
+        - "not_found": 如果在提供的 UI 树中完全找不到符合用户意图的元素，且必须通过视觉验证，请务必返回此 action！
 
         ### 定位器选择铁律
         1. 优先级顺序：css > resourceId > text > description
@@ -213,11 +220,11 @@ class AIBrain:
         # ==========================================
         if decision:
             # 1. 只要成功，必然写入强绑定的页面缓存 (L1)
-            self.cache_manager.set(instruction, ui_dict, decision, llm_latency=llm_latency)
+            self.cache_manager.set(instruction, ui_dict, decision, platform, llm_latency=llm_latency)
 
             # 2. 放开 L2 写入
             if hasattr(self.cache_manager, "set_chat_simple"):
-                self.cache_manager.set_chat_simple(instruction, decision, llm_latency=llm_latency)
+                self.cache_manager.set_chat_simple(instruction, decision, platform, llm_latency=llm_latency)
 
         return decision
 

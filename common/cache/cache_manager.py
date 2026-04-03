@@ -4,15 +4,13 @@ os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 
-import json
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
 import numpy as np
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, List
 from numpy.linalg import norm
-from pathlib import Path
 
-# 重新引入 compute_instruction_hash，用于恢复精确匹配的 O(1) 极速查找
 from common.logs import log
+from config.config import CACHE_SIMILARITY_THRESHOLD, CACHE_EXACT_MATCH_THRESHOLD
 from .cache_stats import CacheStats
 from .cache_hash import compute_ui_hash, compute_instruction_hash
 from .cache_storage import load_cache, save_cache, cleanup_expired_entries
@@ -24,14 +22,13 @@ class CacheManager:
         self,
         cache_dir: str = ".cache",
         enabled: bool = False,
-        ttl_days: int = 7,
+        ttl_days: int = 365,
         max_size_mb: int = 100,
     ):
         self._cache_dir = cache_dir
         self._enabled = enabled
         self._ttl_seconds = ttl_days * 24 * 60 * 60
         self._stats = CacheStats(cache_dir)
-
         self._model_loader = EmbeddingModelLoader()
 
     @property
@@ -43,7 +40,6 @@ class CacheManager:
         self._enabled = value
 
     def _get_model(self):
-        """获取句子向量模型（委托给专门的加载器）"""
         return self._model_loader.load()
 
     def _get_embedding(self, text: str) -> list:
@@ -51,24 +47,44 @@ class CacheManager:
 
     def _cosine_similarity(self, vec1: list, vec2: list) -> float:
         v1, v2 = np.array(vec1), np.array(vec2)
-        if norm(v1) == 0 or norm(v2) == 0:
+        norm1, norm2 = norm(v1), norm(v2)
+        if norm1 == 0 or norm2 == 0:
             return 0.0
-        return float(np.dot(v1, v2) / (norm(v1) * norm(v2)))
+        return float(np.dot(v1, v2) / (norm1 * norm2))
 
-    # ==========================================
-    # 混合检索引擎 (Exact Match + Semantic Fallback)
-    # ==========================================
+    def _cosine_similarity_batch(
+        self, query_vec: list, candidate_vecs: List[list]
+    ) -> List[tuple]:
+        if not candidate_vecs:
+            return []
+        q = np.array(query_vec)
+        q_norm = norm(q)
+        if q_norm == 0:
+            return []
+
+        candidates = np.stack(candidate_vecs)
+        candidate_norms = norm(candidates, axis=1)
+        scores = np.zeros(len(candidate_vecs))
+
+        valid_indices = candidate_norms > 0
+        if np.any(valid_indices):
+            scores[valid_indices] = np.dot(candidates[valid_indices], q) / (
+                candidate_norms[valid_indices] * q_norm
+            )
+
+        return list(enumerate(scores.tolist()))
+
     def _hybrid_search(
         self,
         instruction: str,
         target_ui_hash: Optional[str],
         cache_type: str,
+        platform: str,
         threshold: float,
         exact_key: str,
     ) -> Optional[Dict]:
         if not self._enabled:
             return None
-        self._stats.increment_query()
 
         try:
             cache_data = load_cache(self._cache_dir)
@@ -78,73 +94,60 @@ class CacheManager:
                 self._stats.increment_miss()
                 return None
 
-            # ----------------------------------------------------
-            # O(1) 极速精确匹配
-            # ----------------------------------------------------
             if exact_key in entries:
                 matched_entry = entries[exact_key]
-                log.info(f"🎯 [Exact Cache Hit] {cache_type} 命中")
+                if matched_entry.get("platform") == platform:
+                    saved_time = matched_entry.get("metadata", {}).get("llm_latency", 0.0)
+                    log.info(f"🎯 [Exact Cache Hit] {cache_type} 精确命中 ({platform})")
+                    if saved_time > 0:
+                        log.info(f"⚡ 极速返回！为您节省了 {saved_time:.2f} 秒的 AI 思考时间")
+                    matched_entry["metadata"]["last_accessed"] = datetime.now(timezone.utc).isoformat()
+                    matched_entry["metadata"]["access_count"] = matched_entry["metadata"].get("access_count", 0) + 1
+                    save_cache(self._cache_dir, cache_data)
+                    self._stats.increment_hit()
+                    return matched_entry.get("decision")
 
-                matched_entry["metadata"]["last_accessed"] = datetime.now(
-                    timezone.utc
-                ).isoformat()
-                matched_entry["metadata"]["access_count"] = (
-                    matched_entry["metadata"].get("access_count", 0) + 1
-                )
-                save_cache(self._cache_dir, cache_data)
-
-                self._stats.increment_hit()
-                return matched_entry.get("decision")
-
-            # ----------------------------------------------------
-            # O(N) 向量语义匹配 (泛化兜底)
-            # ----------------------------------------------------
             current_vector = self._get_embedding(instruction)
-
-            best_score = -1.0
-            best_entry_key = None
-
+            candidate_entries = []
+            candidate_vectors = []
             for key, entry in entries.items():
                 if entry.get("type") != cache_type:
                     continue
+                if entry.get("platform") != platform:
+                    continue
                 if target_ui_hash and entry.get("ui_hash") != target_ui_hash:
                     continue
-
                 past_vector = entry.get("instruction_vector")
                 if not past_vector:
                     continue
-
-                score = self._cosine_similarity(current_vector, past_vector)
-                if score > best_score:
-                    best_score = score
-                    best_entry_key = key
-
+                candidate_entries.append(entry)
+                candidate_vectors.append(past_vector)
+            if not candidate_vectors:
+                log.debug("🐌 [Cache Miss] 无候选向量可供匹配")
+                self._stats.increment_miss()
+                return None
+            scores = self._cosine_similarity_batch(current_vector, candidate_vectors)
+            if not scores:
+                log.debug("🐌 [Cache Miss] 无相似度得分")
+                self._stats.increment_miss()
+                return None
+            best_idx, best_score = max(scores, key=lambda s: s[1])
             if best_score >= threshold:
-                matched_entry = entries[best_entry_key]
+                matched_entry = candidate_entries[best_idx]
                 past_inst = matched_entry.get("instruction")
-                log.info(
-                    f"🎯 [Semantic Cache Hit] {cache_type} 语义命中! 相似度: {best_score:.2%}"
-                )
-                log.info(f"💡 [System] 新指令: '{instruction}'")
-                log.info(f"💡 [System] 旧指令: '{past_inst}'")
-
-                matched_entry["metadata"]["last_accessed"] = datetime.now(
-                    timezone.utc
-                ).isoformat()
-                matched_entry["metadata"]["access_count"] = (
-                    matched_entry["metadata"].get("access_count", 0) + 1
-                )
+                saved_time = matched_entry.get("metadata", {}).get("llm_latency", 0.0)
+                log.info(f"🎯 [Semantic Cache Hit] {cache_type} 语义命中! 相似度: {best_score:.2%} ({platform})")
+                log.info(f"💬 新指令: '{instruction}' | 🧠 匹配旧历史: '{past_inst}'")
+                if saved_time > 0:
+                    log.info(f"⚡ 极速返回！为您节省了 {saved_time:.2f} 秒的 AI 思考时间")
+                matched_entry["metadata"]["last_accessed"] = datetime.now(timezone.utc).isoformat()
+                matched_entry["metadata"]["access_count"] = matched_entry["metadata"].get("access_count", 0) + 1
                 save_cache(self._cache_dir, cache_data)
-
                 self._stats.increment_hit()
                 return matched_entry.get("decision")
-
-            log.debug(
-                f"🐌 [Cache Miss] 未精确命中，且最高语义相似度 {best_score:.2%} 未达阈值 {threshold:.2%}"
-            )
+            log.debug(f"🐌 [Cache Miss] 未精确命中，且最高语义相似度 {best_score:.2%} 未达阈值 {threshold:.2%}")
             self._stats.increment_miss()
             return None
-
         except Exception as e:
             log.error(f"[Cache Error] 检索出错: {e}")
             return None
@@ -155,6 +158,7 @@ class CacheManager:
         decision: Dict,
         ui_hash: Optional[str],
         cache_type: str,
+        platform: str,
         exact_key: str,
         llm_latency: float = 0.0,
     ) -> bool:
@@ -163,52 +167,32 @@ class CacheManager:
         try:
             cache_data = load_cache(self._cache_dir)
             entries = cache_data.setdefault("entries", {})
-
-            # ====================================================
-            # 写入前查重防膨胀机制 (Deduplication)
-            # ====================================================
             current_vector = self._get_embedding(instruction)
             keys_to_delete = []
-
             for k, v in entries.items():
                 if v.get("type") != cache_type:
                     continue
-
+                if v.get("platform") != platform:
+                    continue
                 is_same_decision = v.get("decision") == decision
                 is_same_instruction = v.get("instruction") == instruction
-
                 if cache_type == "L1-Action":
-                    # 删掉旧的，保留最新的，避免同一个页面长出无数个相同逻辑的缓存节点
-                    if (
-                        is_same_instruction
-                        and is_same_decision
-                        and v.get("ui_hash") != ui_hash
-                    ):
+                    if is_same_instruction and is_same_decision and v.get("ui_hash") != ui_hash:
                         keys_to_delete.append(k)
-
                 elif cache_type == "L2-SimpleQA":
-                    # 当决策完全一致，且语义向量极其相似 (>0.98)
                     past_vector = v.get("instruction_vector")
                     if past_vector and is_same_decision:
                         sim = self._cosine_similarity(current_vector, past_vector)
-                        if sim > 0.98:
-                            # 仅更新旧条目的热度信息，安全返回
-                            v["metadata"]["last_accessed"] = datetime.now(
-                                timezone.utc
-                            ).isoformat()
-                            v["metadata"]["access_count"] = (
-                                v["metadata"].get("access_count", 0) + 1
-                            )
+                        if sim > CACHE_EXACT_MATCH_THRESHOLD:
+                            v["metadata"]["last_accessed"] = datetime.now(timezone.utc).isoformat()
+                            v["metadata"]["access_count"] = v["metadata"].get("access_count", 0) + 1
                             save_cache(self._cache_dir, cache_data)
                             return True
-
-            # 清理检测到的过期废弃键
             for k in keys_to_delete:
                 del entries[k]
-            # ====================================================
-
             entry = {
                 "type": cache_type,
+                "platform": platform,
                 "instruction": instruction,
                 "instruction_vector": current_vector,
                 "decision": decision,
@@ -222,7 +206,6 @@ class CacheManager:
             }
             if ui_hash is not None:
                 entry["ui_hash"] = ui_hash
-
             entries[exact_key] = entry
             save_cache(self._cache_dir, cache_data)
             return True
@@ -230,51 +213,76 @@ class CacheManager:
             log.error(f"[Cache Error] 写入出错: {e}")
             return False
 
-    # ================= L1 混合页面缓存 (相同页面 + 相同/相似指令) =================
-    def get(
-        self, instruction: str, ui_json: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        ui_hash = compute_ui_hash(ui_json)
-        inst_hash = compute_instruction_hash(instruction)
-        exact_key = f"L1_{inst_hash}_{ui_hash}"
-        return self._hybrid_search(instruction, ui_hash, "L1-Action", 0.90, exact_key)
+    def get(self, instruction: str, ui_json: Dict[str, Any], platform: str) -> Optional[Dict[str, Any]]:
+        try:
+            ui_hash = compute_ui_hash(ui_json)
+            inst_hash = compute_instruction_hash(instruction)
+            exact_key = f"L1_{platform}_{inst_hash}_{ui_hash}"
+            return self._hybrid_search(
+                instruction, ui_hash, "L1-Action", platform, CACHE_SIMILARITY_THRESHOLD, exact_key
+            )
+        except Exception as e:
+            log.error(f"[Cache Error] get 方法出错: {e}")
+            return None
 
     def set(
         self,
         instruction: str,
         ui_json: Dict[str, Any],
         decision: Dict[str, Any],
+        platform: str,
         llm_latency: float = 0.0,
     ) -> bool:
-        ui_hash = compute_ui_hash(ui_json)
-        inst_hash = compute_instruction_hash(instruction)
-        exact_key = f"L1_{inst_hash}_{ui_hash}"
-        return self._set_hybrid(
-            instruction, decision, ui_hash, "L1-Action", exact_key, llm_latency
-        )
+        try:
+            ui_hash = compute_ui_hash(ui_json)
+            inst_hash = compute_instruction_hash(instruction)
+            exact_key = f"L1_{platform}_{inst_hash}_{ui_hash}"
+            return self._set_hybrid(
+                instruction, decision, ui_hash, "L1-Action", platform, exact_key, llm_latency
+            )
+        except Exception as e:
+            log.error(f"[Cache Error] set 方法出错: {e}")
+            return False
 
-    # ================= L2 混合纯问答缓存 (无视页面 + 相同/相似指令) =================
-    def get_chat_simple(self, instruction: str) -> Optional[Dict[str, Any]]:
-        inst_hash = compute_instruction_hash(instruction)
-        exact_key = f"L2_{inst_hash}"
-        return self._hybrid_search(instruction, None, "L2-SimpleQA", 0.88, exact_key)
+    def get_chat_simple(self, instruction: str, platform: str) -> Optional[Dict[str, Any]]:
+        try:
+            inst_hash = compute_instruction_hash(instruction)
+            exact_key = f"L2_{platform}_{inst_hash}"
+            return self._hybrid_search(
+                instruction, None, "L2-SimpleQA", platform, 0.88, exact_key
+            )
+        except Exception as e:
+            log.error(f"[Cache Error] get_chat_simple 方法出错: {e}")
+            return None
 
     def set_chat_simple(
-        self, instruction: str, decision: Dict[str, Any], llm_latency: float = 0.0
+        self,
+        instruction: str,
+        decision: Dict[str, Any],
+        platform: str,
+        llm_latency: float = 0.0,
     ) -> bool:
-        inst_hash = compute_instruction_hash(instruction)
-        exact_key = f"L2_{inst_hash}"
-        return self._set_hybrid(
-            instruction, decision, None, "L2-SimpleQA", exact_key, llm_latency
-        )
+        try:
+            inst_hash = compute_instruction_hash(instruction)
+            exact_key = f"L2_{platform}_{inst_hash}"
+            return self._set_hybrid(
+                instruction, decision, None, "L2-SimpleQA", platform, exact_key, llm_latency
+            )
+        except Exception as e:
+            log.error(f"[Cache Error] set_chat_simple 方法出错: {e}")
+            return False
 
-    # ================= 其他基础方法 =================
     def clear(self) -> bool:
         try:
-            save_cache(self._cache_dir, {"version": "1.1", "entries": {}})
+            save_cache(self._cache_dir, {"version": "1.2", "entries": {}})
             return True
-        except Exception:
+        except Exception as e:
+            log.error(f"[Cache Error] clear 方法出错: {e}")
             return False
 
     def get_stats(self) -> Dict[str, Any]:
-        return self._stats.to_dict()
+        try:
+            return self._stats.to_dict()
+        except Exception as e:
+            log.error(f"[Cache Error] get_stats 方法出错: {e}")
+            return {}
