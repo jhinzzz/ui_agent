@@ -1,5 +1,7 @@
 # ScreenForge
 
+**中文** | [English](./README_EN.md)
+
 > Agentic UI Automation Framework
 >
 > Cross-platform agentic UI automation engine for UI exploration, self-healing, and test generation.
